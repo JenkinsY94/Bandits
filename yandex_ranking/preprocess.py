@@ -2,7 +2,7 @@
 # python3.5
 
 import gzip
-import sys
+# import sys
 import numpy as np
 
 

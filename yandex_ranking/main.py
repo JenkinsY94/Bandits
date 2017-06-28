@@ -8,7 +8,9 @@
 """
 import numpy as np
 import gzip
-from yandex_ranking.preprocess import Session
+import time
+from preprocess import Session
+# from yandex_ranking.preprocess import Session
 from tqdm import tqdm  # progress bar
 # from collections import deque
 from sklearn.model_selection import train_test_split
@@ -17,8 +19,9 @@ from sklearn.metrics import log_loss
 
 print(__doc__)
 
-NUM_LINES = 1e+5  # about 1e+8 lines in train file in total
+NUM_LINES = 1e+4  # about 1e+8 lines in train file in total
 TRAIN_DIR = 'input/train.gz'
+SUPPORT_THRESH = 2
 
 # step 1: preparing data
 # construct sessions.
@@ -47,20 +50,27 @@ print("#unmatched urls: %d \n(possible reason: the clicked url's position is lar
 # construct features from sessions.
 # consider using collections.queue for storing sessions, to improve efficiency.
 X, y = None, None
-categories = Session.gen_category(sessions, sup_thresh=2)
+categories = Session.gen_category(sessions, sup_thresh=SUPPORT_THRESH)
+t1, t2 = 0.0, 0.0
 for s in tqdm(sessions):
+    start = time.time()
     new_x, new_y = s.gen_feature(categories)
+    end = time.time()
+    t1 += (end - start)
     if new_x is None or new_y is None:
         continue
     assert new_x.shape[0] == new_y.shape[0]
     if X is None:
         X, y = new_x, new_y
     else:
+        start = time.time()
         X = np.concatenate((X, new_x), axis=0)
         y = np.concatenate((y, new_y), axis=0)
+        end = time.time()
+        t2 += (end - start)
 del sessions
 print("\nshape of X: %s\nshape of y: %s" % (X.shape, y.shape))
-
+print("time for gen_feature / time for matrix concat = %f" % (t1/t2))
 # step 2: begin train Model 1 (LR) and evaluate.
 rounds = 2
 seed = 12345
@@ -79,4 +89,5 @@ for r in range(rounds):
     all_loss.append(loss)
 print("average accuracy: %f, average loss: %f" % (np.mean(all_acc), np.mean(all_loss)))
 
-# step 3: 
+# step 3:
+
