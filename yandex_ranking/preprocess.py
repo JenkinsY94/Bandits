@@ -65,7 +65,7 @@ class Session(object):
 
         x = np.zeros((last_click_idx+1, len(categories)))  # initialize a feature matrix
         y = self.clicked[: last_click_idx+1]
-        y = np.asarray(y).reshape(len(y), 1)
+        y = np.asarray(y)
         # generate feature from query
         for t in self.terms:
             if t in categories:

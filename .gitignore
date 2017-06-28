@@ -1,2 +1,4 @@
 yandex_ranking/input/
 *.pyc
+.idea/
+

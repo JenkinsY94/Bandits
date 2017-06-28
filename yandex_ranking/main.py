@@ -8,14 +8,16 @@
 """
 import numpy as np
 import gzip
-from preprocess import Session
+from yandex_ranking.preprocess import Session
 from tqdm import tqdm  # progress bar
 # from collections import deque
+from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import log_loss
 
 print(__doc__)
 
-NUM_LINES = 1e+4  # about 1e+8 lines in train file in total
+NUM_LINES = 1e+5  # about 1e+8 lines in train file in total
 TRAIN_DIR = 'input/train.gz'
 
 # step 1: preparing data
@@ -59,6 +61,22 @@ for s in tqdm(sessions):
 del sessions
 print("\nshape of X: %s\nshape of y: %s" % (X.shape, y.shape))
 
-# step 2: begin training
+# step 2: begin train Model 1 (LR) and evaluate.
+rounds = 2
+seed = 12345
+rng = np.random.RandomState(seed)
+clf = LogisticRegression(penalty='l2', solver='liblinear', C=1.0)
+all_acc, all_loss = [], []
+for r in range(rounds):
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=rng)
+    clf.fit(X_train, y_train)
+    y_pred = clf.predict(X_test)  # predict class label
+    acc = np.mean(y_test == y_pred)
+    y_pred_proba = clf.predict_proba(X_test)
+    loss = log_loss(y_test, y_pred_proba, labels=[0, 1])
+    print("round %d, accuracy: %f, log_loss: %f" % (r+1, acc, loss))
+    all_acc.append(acc)
+    all_loss.append(loss)
+print("average accuracy: %f, average loss: %f" % (np.mean(all_acc), np.mean(all_loss)))
 
-# step 3: evaluate performance on test set.
+# step 3: 
