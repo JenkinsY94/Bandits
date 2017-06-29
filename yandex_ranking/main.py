@@ -6,7 +6,6 @@
 """
 import numpy as np
 import gzip
-import time
 from preprocess import Session
 # from yandex_ranking.preprocess import Session
 from tqdm import tqdm  # progress bar
@@ -16,9 +15,9 @@ from sklearn.metrics import log_loss
 
 print(__doc__)
 
-NUM_LINES = 3*1e+4  # about 1e+8 lines in train file in total
+NUM_LINES = 1*1e+4  # about 1e+8 lines in train file in total
 TRAIN_DIR = 'input/train.gz'
-SUPPORT_THRESH = 3
+SUPPORT_THRESH = 2
 
 # step 1: preparing data
 # construct sessions.
@@ -46,7 +45,7 @@ print("#session read: %d" % len(sessions))
 # consider using collections.queue for storing sessions, to improve efficiency.
 categories = Session.gen_category(sessions, sup_thresh=SUPPORT_THRESH)
 X, y = None, None
-valid_samples = 0 # record current sample number in X
+valid_samples = 0  # record current sample number in X
 for s in tqdm(sessions):
     new_x, new_y = s.gen_feature(categories)
     if new_x is None or new_y is None:
@@ -64,10 +63,11 @@ X = X[:valid_samples]
 y = y[:valid_samples]
 del sessions
 print("\nshape of X: %s\nshape of y: %s" % (X.shape, y.shape))
+print("memory usage of X: %d bytes, y: %d bytes" % (X.nbytes, y.nbytes))
 
 # step 2: begin train Model 1 (LR) and evaluate.
-print("start training...")
-rounds = 2
+input("press enter to start training...")
+rounds = 5
 seed = 12345
 rng = np.random.RandomState(seed)
 clf = LogisticRegression(penalty='l2', solver='liblinear', C=1.0)

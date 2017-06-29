@@ -82,9 +82,9 @@ class Session(object):
         r_clicked = list(reversed(self.clicked))
         last_click_idx = len(r_clicked) - 1 - next(i for i, v in enumerate(r_clicked) if v > 0)  # find the index of the last click
 
-        x = np.zeros((last_click_idx+1, len(categories)))  # initialize a feature matrix
+        x = np.zeros((last_click_idx+1, len(categories)), dtype=np.int8)  # initialize a feature matrix
         y = self.clicked[: last_click_idx+1]
-        y = np.asarray(y)
+        y = np.asarray(y, dtype=np.int8)
         # generate feature from query term
         for t in self.terms:
             if t in categories:
