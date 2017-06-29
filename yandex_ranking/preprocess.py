@@ -6,6 +6,8 @@ Issues: ...
 
 TODO:
 1. add `position` attribute in Session class.
+2. extend the `gen_feature()` method to make use of more categories.
+3. include hashing technique to reduce feature dimension.
 """
 
 import gzip
