@@ -13,6 +13,7 @@ TODO:
 import gzip
 # import sys
 import numpy as np
+from sklearn.feature_extraction.text import HashingVectorizer
 
 
 class Session(object):
@@ -140,6 +141,27 @@ class Session(object):
 
         return categories
 
+    def gen_hash_feature(self, n_features=2 ** 10):
+        """generate feature using hashing trick"""
+        if sum(self.clicked) == 0:
+            return None, None  # ignore sessions with no click && sessions not completed
+
+        r_clicked = list(reversed(self.clicked))
+        last_click_idx = len(r_clicked) - 1 - next(i for i, v in enumerate(r_clicked) if v > 0)  # find the index of the last click
+        y = self.clicked[: last_click_idx+1]
+        y = np.asarray(y, dtype=np.int8)
+
+        raw_string = []
+        q_terms = self.query + ' ' + ' '.join(self.terms)
+        for i in range(last_click_idx+1):
+            u_d = ' '.join(self.urls[i])
+            raw_string.append(q_terms + ' ' + u_d)
+
+        # print("raw_string: %s" % raw_string)
+        hv = HashingVectorizer(n_features=n_features)
+        x = hv.transform(raw_string).toarray()
+        return x, y
+
     def check_click(self, k):
         """
         check if click happens in a scaled down version of this session.
@@ -190,7 +212,7 @@ if __name__ == '__main__':
     if Session.not_match_cnt > 0:
         print("Number of not matched url: %d" % Session.not_match_cnt)
 
-    # feature construction
+    # feature construction (one hot)
     categories = Session.gen_category(sessions, sup_thresh=2)
     x, y = sessions[0].gen_feature(categories)
     if x is not None:
@@ -198,3 +220,11 @@ if __name__ == '__main__':
         print(y, y.shape)
         print("num of non-zero elements in row of x: ", np.sum(x, axis=1))
         print("num of non-zero elements in x: ", np.sum(x))
+        print()
+
+    # another feature construction (hashing trick)
+    x, y = sessions[0].gen_hash_feature(n_features=10)
+    if x is not None:
+        print(x, x.shape)
+        print(y, y.shape)
+        print()
