@@ -2,6 +2,8 @@
  --------- train a LR model for predicting CTR of a query-url pair ---------
  data set: Yandex search log (https://www.kaggle.com/c/yandex-personalized-web-search-challenge#logs-format)
  created by: Jinkai Yu
+ TODO: csr_matrix vstack is inefficient. try use lil_matrix during construction; then
+       switch to csr_matrix format for arithmetic operation.
  ----------------------------------------------------------------------------
 """
 import numpy as np
@@ -14,6 +16,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.metrics import log_loss, mean_squared_error
+import time
 
 print(__doc__)
 
@@ -46,6 +49,7 @@ print("#session read: %d" % len(sessions))
 
 # construct features from sessions.
 X, y = None, None
+t1, t2 = 0, 0
 for s in tqdm(sessions):
     new_x, new_y = s.gen_hash_feature(n_features=N_FEATURES)
     if new_x is None or new_y is None:
@@ -53,14 +57,21 @@ for s in tqdm(sessions):
     if X is None:
         X, y = new_x, new_y
     else:
+        start = time.time()
         X = vstack([X, new_x])
+        end = time.time()
+        t1 += end - start
+        start = time.time()
         y = np.concatenate((y, new_y), axis=0)
+        end = time.time()
+        t2 += end - start
 del sessions
 print("\nshape of X: %s\nshape of y: %s" % (X.shape, y.shape))
 print("memory usage of X: %d bytes, y: %d bytes" % (X.data.nbytes, y.nbytes))
+print("t1/t2: %f" % (t1/t2))
 
 # step 2: begin train Model 1 (LR) and evaluate.
-print("start training...")
+input("start training...")
 # rounds = 5
 seed = 12345
 rng = np.random.RandomState(seed)
