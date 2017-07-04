@@ -2,15 +2,15 @@
  --------- train a LR model for predicting CTR of a query-url pair ---------
  data set: Yandex search log (https://www.kaggle.com/c/yandex-personalized-web-search-challenge#logs-format)
  created by: Jinkai Yu
- TODO: csr_matrix vstack is inefficient. try use lil_matrix during construction; then
-       switch to csr_matrix format for arithmetic operation.
+ TODO:
+ csr_matrix vstack is inefficient.
+ Use numpy ndarray during construction and switch to csr_matrix periodically.
  ----------------------------------------------------------------------------
 """
 import numpy as np
-from scipy.sparse import vstack
 import gzip
+from scipy.sparse import csr_matrix, vstack, hstack
 from preprocess import Session
-# from yandex_ranking.preprocess import Session
 from tqdm import tqdm  # progress bar
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
@@ -20,7 +20,7 @@ import time
 
 print(__doc__)
 
-NUM_LINES = 1 * 1e+5  # about 1e+8 lines in train file in total
+NUM_LINES = 1 * 1e+4  # about 1e+8 lines in train file in total
 TRAIN_DIR = 'input/train.gz'
 # SUPPORT_THRESH = 5  # support threshold for category in one-hot feature construction.
 N_FEATURES = 2 ** 10  # feature dimension for hashing features.
@@ -49,7 +49,8 @@ print("#session read: %d" % len(sessions))
 
 # construct features from sessions.
 X, y = None, None
-t1, t2 = 0, 0
+X_ss, y_ss = None, None  # sparse representation of X, y
+cur_val_samples = 0  # record current sample number in X
 for s in tqdm(sessions):
     new_x, new_y = s.gen_hash_feature(n_features=N_FEATURES)
     if new_x is None or new_y is None:
@@ -57,18 +58,28 @@ for s in tqdm(sessions):
     if X is None:
         X, y = new_x, new_y
     else:
-        start = time.time()
-        X = vstack([X, new_x])
-        end = time.time()
-        t1 += end - start
-        start = time.time()
-        y = np.concatenate((y, new_y), axis=0)
-        end = time.time()
-        t2 += end - start
+        while cur_val_samples + new_x.shape[0] > X.shape[0]:
+            X.resize((2 * X.shape[0], X.shape[1]))
+            y.resize(2 * y.shape[0])
+        X[cur_val_samples:cur_val_samples + new_x.shape[0]] = new_x
+        y[cur_val_samples:cur_val_samples + new_x.shape[0]] = new_y
+
+    cur_val_samples += new_x.shape[0]
+
+    if cur_val_samples >= 1e+3:
+        X_ss = vstack([X_ss, csr_matrix(X)])
+        y_ss = hstack([y_ss, y])
+        cur_val_samples = 0
+        X, y = None, None
+X = X[:cur_val_samples]
+y = y[:cur_val_samples]
+X_ss = vstack([X_ss, csr_matrix(X)])
+y_ss = hstack([y_ss, y])
+y_ss = y_ss.toarray().reshape(y_ss.shape[1])
+del X, y
 del sessions
-print("\nshape of X: %s\nshape of y: %s" % (X.shape, y.shape))
-print("memory usage of X: %d bytes, y: %d bytes" % (X.data.nbytes, y.nbytes))
-print("t1/t2: %f" % (t1/t2))
+
+print("\nshape of X: %s\nshape of y: %s" % (X_ss.shape, y_ss.shape))
 
 # step 2: begin train Model 1 (LR) and evaluate.
 input("start training...")
@@ -80,7 +91,7 @@ clf_2 = GradientBoostingRegressor(n_estimators=20, learning_rate=0.1, max_depth=
 all_acc, all_loss = [], []
 
 # for r in range(rounds):
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=rng)
+X_train, X_test, y_train, y_test = train_test_split(X_ss, y_ss, test_size=0.3, random_state=rng)
 clf_1.fit(X_train, y_train)
 y_pred = clf_1.predict(X_test.toarray())  # predict class label
 acc = np.mean(y_test == y_pred)

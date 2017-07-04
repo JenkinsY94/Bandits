@@ -145,8 +145,8 @@ class Session(object):
         """
         generate feature using hashing trick.
         :return:
-        x: scipy sparse matrix csr
-        y: numpy.ndarray
+        x: numpy.2darray
+        y: numpy.1darray
         """
         if sum(self.clicked) == 0:
             return None, None  # ignore sessions with no click && sessions not completed
@@ -164,7 +164,7 @@ class Session(object):
 
         # print("raw_string: %s" % raw_string)
         hv = HashingVectorizer(n_features=n_features)
-        x = hv.transform(raw_string)
+        x = hv.transform(raw_string).toarray()
         return x, y
 
     def check_click(self, k):
