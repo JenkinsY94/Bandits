@@ -34,12 +34,14 @@ print(__doc__)
 
 NUM_LINES = 1 * 1e+5          # about 1e+8 lines in train file in total
 TRAIN_DIR = 'input/train.gz'
-N_FEATURES = 2 ** 14          # feature dimension for hashing features.
+N_FEATURES = 2 ** 12          # feature dimension for hashing features.
 K = 5                         # the position to explore. select from [1,10]. 10 denotes no-explore.
-MAX_POS = 10                   # exploration candidate from position [K, MAX_POS]
+MAX_POS = 10                  # exploration candidate from position [K, MAX_POS]
 
-# ========= STEP 1: preparing data ==========
+# ++++++++++++++++++++++++++++++++++++
+# STEP 1: preparing data
 # construct sessions.
+# ++++++++++++++++++++++++++++++++++++
 sessions = []
 sess_train, sess_explore, sess_test = [], [], []
 with gzip.open(TRAIN_DIR, 'r') as f_train:
@@ -111,8 +113,9 @@ def construct_feature(sessions, k=10, max_pos=10):
         del X, y
         return X_ss, y_ss
 
-
-# === STEP 2: construct features(no-explore) for baseline model LR, train, and evaluate.====
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# STEP 2: construct features(no-explore) for baseline model LR, train, and evaluate.
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 print("="*10 + " baseline model LR " + "="*10)
 X_train, y_train = construct_feature(sess_train+sess_explore, k=K)
 print("Shape of X_train: %s, shape of y_train: %s" % (X_train.shape, y_train.shape))
@@ -130,7 +133,8 @@ num_clicked_sess, num_clicked_item = 0, 0
 num_sess = 0
 for s_test in sess_test:
     X_test, y_test = construct_feature([s_test], k=10)
-    if X_test is None: continue
+    if X_test is None:
+        continue
     y_pred_test = clf_base.predict_proba(X_test.toarray())
     y_pred_test = [i[1] for i in y_pred_test]  # probability of positive class(clicked).
     num_sess += 1
@@ -144,7 +148,9 @@ print("Summary of BASELINE LR:\n CTR(session level): %f\n CTR(item level): %f" %
 
 del clf_base, X_train, y_train
 
-# ============ STEP 3: train LR, GBDT; TS explore (with GBDT); evaluate. ============
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# STEP 3: train LR, GBDT; TS explore (with GBDT); evaluate.
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 print("="*10 + " LR + explore using TS " + "="*10)
 X_train, y_train = construct_feature(sess_train, k=K)
 print("Shape of X_train: %s, shape of y_train: %s" % (X_train.shape, y_train.shape))
@@ -156,7 +162,9 @@ clf_1.fit(X_train, y_train)
 # explore and retrain LR
 X_explore = np.zeros((K*len(sess_explore), N_FEATURES))
 y_explore = np.zeros(K*len(sess_explore))
-ts = TSOverScore(a=1, b=1)  # initialize with prior beta(a,b)
+sample_weight_exp = []  # re-weight explored items.
+ts = TSOverScore(a=1, b=1)  # initialize thompson sampling with prior beta(a,b)
+
 valid_exp_sample = 0
 for s_exp in sess_explore:
     x_exp, y_exp = construct_feature([s_exp], k=10)
@@ -166,28 +174,38 @@ for s_exp in sess_explore:
     y_pred_exp = clf_1.predict_proba(x_exp)
     y_pred_exp = [item[1] for item in y_pred_exp]
 
-    exp_idx, bucket_idx = ts.thompson_sample(y_pred_exp, k=K, max_pos=MAX_POS)
+    exp_idx, bucket_idx, weight = ts.thompson_sample(y_pred_exp, k=K, max_pos=MAX_POS, weight_type='NA')
 
     x_exp, y_exp = log_k_items(x_exp, y_exp, exp_idx, k=K)
 
     X_explore[valid_exp_sample:valid_exp_sample+K] = x_exp
     y_explore[valid_exp_sample:valid_exp_sample+K] = y_exp
+    cur_exp_weight = [1] * (K-1) + [weight]  # set the explored item's weight
+    sample_weight_exp += cur_exp_weight
     valid_exp_sample += K
 
     ts.batch_update(bucket_idx, y_exp[K-1])  # real time update, no delay.
-# retrain with new data collected from explore.
+
+X_explore = X_explore[:valid_exp_sample]
 X_explore_ss = csr_matrix(X_explore)
 del X_explore
+y_explore = y_explore[:valid_exp_sample]
+
+# retrain with new data collected from explore.
 new_X = vstack([X_train, X_explore_ss])
 new_y = np.concatenate((y_train, y_explore))
-clf_1.fit(new_X, new_y)
+sample_weight_train = [1 for i in range(len(y_train))]
+sample_weight = np.asarray(sample_weight_train + sample_weight_exp)
+
+clf_1.fit(new_X, new_y, sample_weight=sample_weight)
 
 # evaluate it on test set
 num_clicked_sess, num_clicked_item = 0, 0
 num_sess = 0
 for s_test in sess_test:
     X_test, y_test = construct_feature([s_test], k=10)
-    if X_test is None: continue
+    if X_test is None:
+        continue
     y_pred_test = clf_1.predict_proba(X_test.toarray())
     y_pred_test = [item[1] for item in y_pred_test]  # probability of positive class(clicked).
     num_sess += 1
