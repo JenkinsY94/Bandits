@@ -9,34 +9,37 @@
  Q:
  1. M1 (LR) is not incrementally updated during exploration; only TS's param get updated in real time.
  TODO:
- -- 0. split sessions into 3 parts.
- -- 1. extend model's `gen_hash_feature` to return only top-k items.
- -- 2. add explore module.
- -- 3. X_test returns all features of original session.
- 4. set prior of beta(a,b) using 1st stage's ctr.
- 5. add weight for ts chosen item.
+ 0. implement TS over position.
+ 5. set prior of beta(a,b) using 1st stage's ctr.
  6. extend to enable `MAX_POS` > 10, let MAX_POS = len(sess.clicked)
- ----------------------------------------------------------------------------
+ 7. Incorporate `uncertainty` score from Model 2 with TS.
+ 8. use FTRL (tensorflow) for baseline.
+ -----------------------------------------------------------------------------
 """
 import numpy as np
 import gzip
+import random
 from scipy.sparse import csr_matrix, vstack, hstack
 from tqdm import tqdm  # progress bar
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.metrics import log_loss, mean_squared_error
+from sklearn.metrics import log_loss, mean_squared_error, precision_score, precision_recall_curve, roc_curve, roc_auc_score
 import time
+import matplotlib.pyplot as plt
 from model import Session
 from MAB import TSOverScore
 from offline_emulate import check_sess_click, log_k_items
 
+
 print(__doc__)
 
-NUM_LINES = 1 * 1e+5          # about 1e+8 lines in train file in total
+NUM_LINES = int(5 * 1e+6)          # maximum number of session to read (about 1e+8 lines in train file in total)
+NUM_SESS = int(1e+5)               # maximum number of session to use
 TRAIN_DIR = 'input/train.gz'
-N_FEATURES = 2 ** 12          # feature dimension for hashing features.
-K = 5                         # the position to explore. select from [1,10]. 10 denotes no-explore.
-MAX_POS = 10                  # exploration candidate from position [K, MAX_POS]
+RAN_SEED = 12345
+N_FEATURES = 2 ** 12               # feature dimension for hashing features.
+K = 5                              # the position to explore. select from [1,10]. 10 denotes no-explore.
+MAX_POS = 10                       # exploration candidate from position [K, MAX_POS]
 
 # ++++++++++++++++++++++++++++++++++++
 # STEP 1: preparing data
@@ -45,7 +48,7 @@ MAX_POS = 10                  # exploration candidate from position [K, MAX_POS]
 sessions = []
 sess_train, sess_explore, sess_test = [], [], []
 with gzip.open(TRAIN_DIR, 'r') as f_train:
-    for (idx, line) in enumerate(f_train):
+    for (idx, line) in tqdm(enumerate(f_train)):
         line = line.decode('utf-8')  # decode byte to string
         line = line.strip().split('\t')
         if line[1] == 'M':  # meta
@@ -58,17 +61,20 @@ with gzip.open(TRAIN_DIR, 'r') as f_train:
             raise ValueError("cannot resolve this line: \n%s" % line)
         if idx + 1 == NUM_LINES:
             break
+random.seed(RAN_SEED)
+random.shuffle(sessions)
+sessions = sessions[:NUM_SESS]
 num_sessions = len(sessions)
 print("session example:\n%s" % sessions[-2].to_string())
-print("#session read: %d" % num_sessions)
+print("#session to use: %d" % num_sessions)
 
 # split all sessions into 3 parts
 # day 1-10 for train, day 11-20 for explore and retrain (for baseline this is also for train),
 # day 21-30 for test.
 for s in sessions:
-    if s.day <= 10:
+    if s.day < 10:
         sess_train.append(s)
-    elif s.day <= 20:
+    elif s.day < 20:
         sess_explore.append(s)
     else:
         sess_test.append(s)
@@ -78,7 +84,7 @@ print("proportion of samples in: \ntrain set: %.3f%%, \nexplore set: %.3f%%, \nt
 
 
 # construct features from list of sessions.
-def construct_feature(sessions, k=10, max_pos=10):
+def construct_feature(sessions, k=10):
     X, y = None, None
     X_ss, y_ss = None, None  # sparse representation of X, y
     cur_val_samples = 0  # record current sample number in X
@@ -113,6 +119,44 @@ def construct_feature(sessions, k=10, max_pos=10):
         del X, y
         return X_ss, y_ss
 
+
+# evaluate algorithm on test set
+def evaluate_algo(clf, test_sess, plot=False, model_name=''):
+    num_clicked_sess, num_clicked_item = 0, 0
+    num_sess = 0
+    y_true, y_pred = [], []
+    for test_s in test_sess:
+        cur_x, cur_y = construct_feature([test_s], k=10)
+        if cur_x is None:
+            continue
+        cur_y_pred = clf.predict_proba(cur_x)
+        cur_y_pred = [i[1] for i in cur_y_pred]  # probability of positive class(clicked).
+        y_true += cur_y.tolist()
+        y_pred += cur_y_pred
+        num_sess += 1
+        cur_click_num = check_sess_click(cur_y, cur_y_pred, k=K)
+        num_clicked_item += cur_click_num
+        if cur_click_num > 0:
+            num_clicked_sess += 1
+    sess_ctr = 1.0 * num_clicked_sess / num_sess
+    item_ctr = 1.0 * num_clicked_item / (K * num_sess)
+    auc = roc_auc_score(y_true, y_pred)
+    print("Summary of %s:\n CTR(session level): %f\n CTR(item level): %f\n AUC: %f" % (model_name, sess_ctr, item_ctr, auc))
+    if plot:
+        precision, recall, _ = precision_recall_curve(y_true, y_pred)
+        plt.plot(recall, precision)
+        plt.xlabel('Recall')
+        plt.ylabel('Precision')
+        plt.title('Precision-Recall Curve (%s)' % model_name)
+        plt.show()
+        fpr, tpr, _ = roc_curve(y_true, y_pred)
+        plt.figure()
+        plt.plot(fpr, tpr)
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('ROC (%s)' % model_name)
+        plt.show()
+
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # STEP 2: construct features(no-explore) for baseline model LR, train, and evaluate.
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -120,31 +164,17 @@ print("="*10 + " baseline model LR " + "="*10)
 X_train, y_train = construct_feature(sess_train+sess_explore, k=K)
 print("Shape of X_train: %s, shape of y_train: %s" % (X_train.shape, y_train.shape))
 
-clf_base = LogisticRegression(penalty='l1', solver='liblinear', C=1.0, verbose=0)
+clf_base = LogisticRegression(penalty='l1', solver='liblinear', C=1.0, class_weight='balanced', verbose=0)
 clf_base.fit(X_train, y_train)
 
-y_pred_tr = clf_base.predict(X_train.toarray())  # predict class label
+y_pred_tr = clf_base.predict(X_train)  # predict class label
 acc = np.mean(y_train == y_pred_tr)
+precision = precision_score(y_train, y_pred_tr, labels=[0, 1])
 y_pred_proba_tr = clf_base.predict_proba(X_train.toarray())
 loss = log_loss(y_train, y_pred_proba_tr, labels=[0, 1])
-print("BASELINE(LR) in train-set:\n accuracy: %f, log_loss: %f" % (acc, loss))
+print("BASELINE(LR) in train-set:\n accuracy: %f, precision: %f, log_loss: %f" % (acc, precision, loss))
 
-num_clicked_sess, num_clicked_item = 0, 0
-num_sess = 0
-for s_test in sess_test:
-    X_test, y_test = construct_feature([s_test], k=10)
-    if X_test is None:
-        continue
-    y_pred_test = clf_base.predict_proba(X_test.toarray())
-    y_pred_test = [i[1] for i in y_pred_test]  # probability of positive class(clicked).
-    num_sess += 1
-    cur_click_num = check_sess_click(y_test, y_pred_test, k=K)
-    num_clicked_item += cur_click_num
-    if cur_click_num > 0:
-        num_clicked_sess += 1
-base_sess_ctr = 1.0 * num_clicked_sess / num_sess
-base_item_ctr = 1.0 * num_clicked_item / (K * num_sess)
-print("Summary of BASELINE LR:\n CTR(session level): %f\n CTR(item level): %f" % (base_sess_ctr, base_item_ctr))
+evaluate_algo(clf_base, sess_test, plot=False, model_name='BASELINE LR')
 
 del clf_base, X_train, y_train
 
@@ -155,7 +185,7 @@ print("="*10 + " LR + explore using TS " + "="*10)
 X_train, y_train = construct_feature(sess_train, k=K)
 print("Shape of X_train: %s, shape of y_train: %s" % (X_train.shape, y_train.shape))
 
-clf_1 = LogisticRegression(penalty='l1', solver='liblinear', C=1.0, verbose=0)
+clf_1 = LogisticRegression(penalty='l1', solver='liblinear', C=1.0, class_weight='balanced', verbose=0)
 # clf_2 = GradientBoostingRegressor(n_estimators=20, learning_rate=0.1, max_depth=10, loss='ls', verbose=1)
 clf_1.fit(X_train, y_train)
 
@@ -174,7 +204,7 @@ for s_exp in sess_explore:
     y_pred_exp = clf_1.predict_proba(x_exp)
     y_pred_exp = [item[1] for item in y_pred_exp]
 
-    exp_idx, bucket_idx, weight = ts.thompson_sample(y_pred_exp, k=K, max_pos=MAX_POS, weight_type='NA')
+    exp_idx, bucket_idx, weight = ts.thompson_sample(y_pred_exp, k=K, max_pos=MAX_POS, weight_type='multinomial')
 
     x_exp, y_exp = log_k_items(x_exp, y_exp, exp_idx, k=K)
 
@@ -198,21 +228,4 @@ sample_weight_train = [1 for i in range(len(y_train))]
 sample_weight = np.asarray(sample_weight_train + sample_weight_exp)
 
 clf_1.fit(new_X, new_y, sample_weight=sample_weight)
-
-# evaluate it on test set
-num_clicked_sess, num_clicked_item = 0, 0
-num_sess = 0
-for s_test in sess_test:
-    X_test, y_test = construct_feature([s_test], k=10)
-    if X_test is None:
-        continue
-    y_pred_test = clf_1.predict_proba(X_test.toarray())
-    y_pred_test = [item[1] for item in y_pred_test]  # probability of positive class(clicked).
-    num_sess += 1
-    cur_click_num = check_sess_click(y_test, y_pred_test, k=K)
-    num_clicked_item += cur_click_num
-    if cur_click_num > 0:
-        num_clicked_sess += 1
-base_sess_ctr = 1.0 * num_clicked_sess / num_sess
-base_item_ctr = 1.0 * num_clicked_item / (K * num_sess)
-print("Summary of LR + TS_score:\n CTR(session level): %f\n CTR(item level): %f" % (base_sess_ctr, base_item_ctr))
+evaluate_algo(clf_1, sess_test, plot=True, model_name='LR with TS')

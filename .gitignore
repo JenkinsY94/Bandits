@@ -1,4 +1,6 @@
 yandex_ranking/input/
+yandex_ranking/test_client.py
 *.pyc
 .idea/
+
 
