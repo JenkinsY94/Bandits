@@ -9,7 +9,6 @@
  Q:
  1. M1 (LR) is not incrementally updated during exploration; only TS's param get updated in real time.
  TODO:
- 5. try different K, N_FEATURES.
  6. extend to enable `MAX_POS` > 10, let MAX_POS = len(sess.clicked)
  7. Incorporate `uncertainty` score from Model 2 with TS；set prior of beta(a,b) using 1st stage's ctr.
  8. use FTRL (tensorflow) for baseline.
@@ -32,7 +31,7 @@ from offline_emulate import check_sess_click, log_k_items
 
 print(__doc__)
 
-NUM_LINES = int(5 * 1e+5)          # maximum number of session to read (about 1e+8 lines in train file in total)
+NUM_LINES = int(5 * 1e+6)          # maximum number of session to read (about 1e+8 lines in train file in total)
 NUM_SESS = int(1e+5)               # maximum number of session to use
 TRAIN_DIR = 'input/train.gz'
 RAN_SEED = 12345
@@ -160,23 +159,23 @@ def evaluate_algo(clf, test_sess, plot=False, model_name=''):
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # STEP 2: construct features(no-explore) for baseline model LR, train, and evaluate.
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# print("="*10 + " baseline model LR " + "="*10)
-# X_train, y_train = construct_feature(sess_train+sess_explore, k=K)
-# print("Shape of X_train: %s, shape of y_train: %s" % (X_train.shape, y_train.shape))
-#
-# clf_base = LogisticRegression(penalty='l1', solver='liblinear', C=1.0, class_weight='balanced', verbose=0)
-# clf_base.fit(X_train, y_train)
-#
-# y_pred_tr = clf_base.predict(X_train)  # predict class label
-# acc = np.mean(y_train == y_pred_tr)
-# precision = precision_score(y_train, y_pred_tr, labels=[0, 1])
-# y_pred_proba_tr = clf_base.predict_proba(X_train.toarray())
-# loss = log_loss(y_train, y_pred_proba_tr, labels=[0, 1])
-# print("BASELINE(LR) in train-set:\n accuracy: %f, precision: %f, log_loss: %f" % (acc, precision, loss))
-#
-# evaluate_algo(clf_base, sess_test, plot=False, model_name='BASELINE LR')
-#
-# del clf_base, X_train, y_train
+print("="*10 + " baseline model LR " + "="*10)
+X_train, y_train = construct_feature(sess_train+sess_explore, k=K)
+print("Shape of X_train: %s, shape of y_train: %s" % (X_train.shape, y_train.shape))
+
+clf_base = LogisticRegression(penalty='l1', solver='liblinear', C=1.0, class_weight='balanced', verbose=0)
+clf_base.fit(X_train, y_train)
+
+y_pred_tr = clf_base.predict(X_train)  # predict class label
+acc = np.mean(y_train == y_pred_tr)
+precision = precision_score(y_train, y_pred_tr, labels=[0, 1])
+y_pred_proba_tr = clf_base.predict_proba(X_train.toarray())
+loss = log_loss(y_train, y_pred_proba_tr, labels=[0, 1])
+print("BASELINE(LR) in train-set:\n accuracy: %f, precision: %f, log_loss: %f" % (acc, precision, loss))
+
+evaluate_algo(clf_base, sess_test, plot=False, model_name='BASELINE LR')
+
+del clf_base, X_train, y_train
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # STEP 3: train LR, GBDT; TS explore (with GBDT); evaluate.
@@ -193,9 +192,15 @@ clf_1.fit(X_train, y_train)
 X_explore = np.zeros((K*len(sess_explore), N_FEATURES))
 y_explore = np.zeros(K*len(sess_explore))
 sample_weight_exp = []  # re-weight explored items.
-ts = TSOverScore(a=1, b=1)  # initialize thompson sampling with prior beta(a,b)
+# +++++++++++++++++++++++++++++++++++++++++++++++++++
+# use empirical average ctr as beta prior param a, b
+suc_times = sum(y_train)
+fail_times = len(y_train) - suc_times
+print("\nsetting beta prior beta(a=%f, b=%f)\n" % (suc_times, fail_times))
+ts = TSOverScore(a=suc_times, b=fail_times)  # initialize thompson sampling with prior beta(a,b), TSOverScore(a=1, b=1)
 # ts.show_distribution(bucket_idx=8)
 # ts = TSOverPosition(k=K, max_pos=MAX_POS, a=1, b=1)
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 valid_exp_sample = 0
 for s_exp in sess_explore:
@@ -235,4 +240,4 @@ sample_weight_train = [1 for i in range(len(y_train))]
 sample_weight = np.asarray(sample_weight_train + sample_weight_exp)
 
 clf_1.fit(new_X, new_y, sample_weight=sample_weight)
-evaluate_algo(clf_1, sess_test, plot=True, model_name='LR with TS')
+evaluate_algo(clf_1, sess_test, plot=False, model_name='LR with TS')
