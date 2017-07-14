@@ -20,7 +20,13 @@ def check_sess_click(y_true, y_predict, k):
 
 
 def log_k_items(x, y, exp_idx, k):
-
+    """
+    :param x:
+    :param y:
+    :param exp_idx: index of sample for explore (index start from 0)
+    :param k: index of sample to be replaced by explored item. (start from 1)
+    :return:
+    """
     assert k < x.shape[0] and exp_idx < x.shape[0]
     x_topk = x[:k]
     y_topk = y[:k]
