@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
  ------------------- predicting CTR of a query-url pair ----------------------
  data set: Yandex search log (https://www.kaggle.com/c/yandex-personalized-web-search-challenge#logs-format)
@@ -9,10 +10,11 @@
  Q:
  1. M1 (LR) is not incrementally updated during exploration; only TS's param get updated in real time.
  TODO:
- 7. Incorporate `uncertainty` score from Model 2 with TS；set prior of beta(a,b) using 1st stage's ctr.
+ 7. Incorporate uncertainty score from Model 2 with TS；set prior of beta(a,b) using 1st stage's ctr.
  8. use FTRL (tensorflow) for baseline.
  -----------------------------------------------------------------------------
 """
+import logging
 import numpy as np
 import gzip
 import random
@@ -30,7 +32,7 @@ from offline_emulate import check_sess_click, log_k_items
 
 print(__doc__)
 
-NUM_LINES = int(5 * 1e+6)          # maximum number of session to read (about 1e+8 lines in train file in total)
+NUM_LINES = int(5 * 1e+3)          # maximum number of session to read (about 1e+8 lines in train file in total)
 NUM_SESS = int(1e+5)               # maximum number of session to use
 TRAIN_DIR = 'input/train.gz'
 RAN_SEED = 12345
@@ -40,7 +42,10 @@ K = 3                              # the position to explore. select from [1,10]
 MAX_POS = 10                       # exploration candidate from position [K, MAX_POS]
 TS_POLICY = 'pos_score'            # {score, position, pos_score, mae}
 WEIGHT_SCHEME = 'multinomial'      # {multinomial, propensity, na}
-
+EXP_SETTING = {'num_sess': NUM_SESS, 'feature_dim': N_FEATURES,
+               'K': K, 'max_position': MAX_POS, 'E-E policy': TS_POLICY, 'weight': WEIGHT_SCHEME}
+logging.basicConfig(filename='exp.log', filemode='a', level=logging.INFO)
+logging.info(EXP_SETTING)
 # ++++++++++++++++++++++++++++++++++++
 # STEP 1: preparing data
 # construct sessions.
@@ -142,6 +147,7 @@ def evaluate_algo(clf, test_sess, plot=False, model_name=''):
     item_ctr = 1.0 * num_clicked_item / (K * num_sess)
     auc = roc_auc_score(y_true, y_pred)
     print("Summary of %s:\n CTR(session level): %f\n CTR(item level): %f\n AUC: %f" % (model_name, sess_ctr, item_ctr, auc))
+    logging.info("Summary of %s:\n CTR(session level): %f\n CTR(item level): %f\n AUC: %f" % (model_name, sess_ctr, item_ctr, auc))
     if plot:
         precision, recall, _ = precision_recall_curve(y_true, y_pred)
         plt.plot(recall, precision)
@@ -182,6 +188,7 @@ del clf_base, X_train, y_train
 # STEP 3: train LR, GBDT; TS explore; evaluate.
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 print("="*10 + " LR + explore using TS " + "="*10)
+print("="*10 + "policy: " + TS_POLICY + ", weight scheme: " + WEIGHT_SCHEME + "="*10)
 X_train, y_train = construct_feature(sess_train, k=K)
 print("Shape of X_train: %s, shape of y_train: %s" % (X_train.shape, y_train.shape))
 
@@ -234,7 +241,7 @@ X_explore_ss = csr_matrix(X_explore)
 del X_explore
 y_explore = y_explore[:valid_exp_sample]
 
-ts.show_explore_times()
+# ts.show_explore_times()
 # ts.show_distribution(bucket_idx=[15, 16, 17])
 # ts.show_distribution(bucket_idx=[20, 25, 30])
 # ts.show_distribution(bucket_idx=[50, 70, 90])
