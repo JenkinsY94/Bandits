@@ -9,7 +9,6 @@
  Q:
  1. M1 (LR) is not incrementally updated during exploration; only TS's param get updated in real time.
  TODO:
- 6. extend to enable `MAX_POS` > 10, let MAX_POS = len(sess.clicked)
  7. Incorporate `uncertainty` score from Model 2 with TS；set prior of beta(a,b) using 1st stage's ctr.
  8. use FTRL (tensorflow) for baseline.
  -----------------------------------------------------------------------------
@@ -25,7 +24,7 @@ from sklearn.metrics import log_loss, mean_squared_error, precision_score, preci
 import time
 import matplotlib.pyplot as plt
 from model import Session
-from MAB import TSOverScore, TSOverPosition
+from MAB import TSOverScore, TSOverPosition, TSOverPosScore, TSOverMae
 from offline_emulate import check_sess_click, log_k_items
 
 
@@ -36,9 +35,11 @@ NUM_SESS = int(1e+5)               # maximum number of session to use
 TRAIN_DIR = 'input/train.gz'
 RAN_SEED = 12345
 # RAN_SEED = 985
-N_FEATURES = 2 ** 12               # feature dimension for hashing features.
-K = 5                              # the position to explore. select from [1,10]. 10 denotes no-explore.
+N_FEATURES = 2 ** 14               # feature dimension for hashing features.
+K = 3                              # the position to explore. select from [1,10]. 10 denotes no-explore.
 MAX_POS = 10                       # exploration candidate from position [K, MAX_POS]
+TS_POLICY = 'pos_score'            # {score, position, pos_score, mae}
+WEIGHT_SCHEME = 'multinomial'      # {multinomial, propensity, na}
 
 # ++++++++++++++++++++++++++++++++++++
 # STEP 1: preparing data
@@ -157,7 +158,7 @@ def evaluate_algo(clf, test_sess, plot=False, model_name=''):
         plt.show()
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# STEP 2: construct features(no-explore) for baseline model LR, train, and evaluate.
+# STEP 2: construct features(no-explore) for baseline model LR. train and evaluate.
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 print("="*10 + " baseline model LR " + "="*10)
 X_train, y_train = construct_feature(sess_train+sess_explore, k=K)
@@ -178,7 +179,7 @@ evaluate_algo(clf_base, sess_test, plot=False, model_name='BASELINE LR')
 del clf_base, X_train, y_train
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# STEP 3: train LR, GBDT; TS explore (with GBDT); evaluate.
+# STEP 3: train LR, GBDT; TS explore; evaluate.
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 print("="*10 + " LR + explore using TS " + "="*10)
 X_train, y_train = construct_feature(sess_train, k=K)
@@ -192,15 +193,20 @@ clf_1.fit(X_train, y_train)
 X_explore = np.zeros((K*len(sess_explore), N_FEATURES))
 y_explore = np.zeros(K*len(sess_explore))
 sample_weight_exp = []  # re-weight explored items.
-# +++++++++++++++++++++++++++++++++++++++++++++++++++
 # use empirical average ctr as beta prior param a, b
 suc_times = sum(y_train)
 fail_times = len(y_train) - suc_times
 print("\nsetting beta prior beta(a=%f, b=%f)\n" % (suc_times, fail_times))
-ts = TSOverScore(a=suc_times, b=fail_times)  # initialize thompson sampling with prior beta(a,b), TSOverScore(a=1, b=1)
-# ts.show_distribution(bucket_idx=8)
-# ts = TSOverPosition(k=K, max_pos=MAX_POS, a=1, b=1)
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++
+if TS_POLICY == 'score':
+    ts = TSOverScore(a=suc_times, b=fail_times)  # initialize thompson sampling with prior beta(a,b), TSOverScore(a=1, b=1)
+elif TS_POLICY == 'position':
+    ts = TSOverPosition(k=K, max_pos=MAX_POS, a=suc_times, b=fail_times)
+elif TS_POLICY == 'pos_score':
+    ts = TSOverPosScore(k=K, max_pos=MAX_POS, a=suc_times, b=fail_times)
+elif TS_POLICY == 'mae':
+    ts = TSOverMae()
+else:
+    raise ValueError('cannot resolve TS_POLICY')
 
 valid_exp_sample = 0
 for s_exp in sess_explore:
@@ -211,7 +217,7 @@ for s_exp in sess_explore:
     y_pred_exp = clf_1.predict_proba(x_exp)
     y_pred_exp = [item[1] for item in y_pred_exp]
 
-    exp_idx, bucket_idx, weight = ts.thompson_sample(y_pred_exp, k=K, max_pos=MAX_POS, weight_type='multinomial')
+    exp_idx, bucket_idx, weight = ts.thompson_sample(y_pred_exp, k=K, max_pos=MAX_POS, weight_type=WEIGHT_SCHEME)
 
     x_exp, y_exp = log_k_items(x_exp, y_exp, exp_idx, k=K)
 
@@ -228,7 +234,7 @@ X_explore_ss = csr_matrix(X_explore)
 del X_explore
 y_explore = y_explore[:valid_exp_sample]
 
-# ts.show_explore_times()
+ts.show_explore_times()
 # ts.show_distribution(bucket_idx=[15, 16, 17])
 # ts.show_distribution(bucket_idx=[20, 25, 30])
 # ts.show_distribution(bucket_idx=[50, 70, 90])
