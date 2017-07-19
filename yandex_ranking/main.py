@@ -26,26 +26,26 @@ from sklearn.metrics import log_loss, mean_squared_error, precision_score, preci
 import time
 import matplotlib.pyplot as plt
 from model import Session
-from MAB import TSOverScore, TSOverPosition, TSOverPosScore, TSOverMae
+from MAB import TSOverScore, TSOverPosition, TSOverPosScore, TSOverAbsErr
 from offline_emulate import check_sess_click, log_k_items
 
 
 print(__doc__)
 
-NUM_LINES = int(5 * 1e+3)          # maximum number of session to read (about 1e+8 lines in train file in total)
+NUM_LINES = int(5 * 1e+6)          # maximum number of session to read (about 1e+8 lines in train file in total)
 NUM_SESS = int(1e+5)               # maximum number of session to use
 TRAIN_DIR = 'input/train.gz'
 RAN_SEED = 12345
-# RAN_SEED = 985
 N_FEATURES = 2 ** 14               # feature dimension for hashing features.
 K = 3                              # the position to explore. select from [1,10]. 10 denotes no-explore.
 MAX_POS = 10                       # exploration candidate from position [K, MAX_POS]
-TS_POLICY = 'pos_score'            # {score, position, pos_score, mae}
+TS_POLICY = 'abs_err'            # {score, position, pos_score, abs_err}
 WEIGHT_SCHEME = 'multinomial'      # {multinomial, propensity, na}
 EXP_SETTING = {'num_sess': NUM_SESS, 'feature_dim': N_FEATURES,
                'K': K, 'max_position': MAX_POS, 'E-E policy': TS_POLICY, 'weight': WEIGHT_SCHEME}
 logging.basicConfig(filename='exp.log', filemode='a', level=logging.INFO)
 logging.info(EXP_SETTING)
+
 # ++++++++++++++++++++++++++++++++++++
 # STEP 1: preparing data
 # construct sessions.
@@ -193,16 +193,15 @@ X_train, y_train = construct_feature(sess_train, k=K)
 print("Shape of X_train: %s, shape of y_train: %s" % (X_train.shape, y_train.shape))
 
 clf_1 = LogisticRegression(penalty='l1', solver='liblinear', C=1.0, class_weight='balanced', verbose=0)
-# clf_2 = GradientBoostingRegressor(n_estimators=20, learning_rate=0.1, max_depth=10, loss='ls', verbose=1)
 clf_1.fit(X_train, y_train)
 
 # explore and retrain LR
 X_explore = np.zeros((K*len(sess_explore), N_FEATURES))
 y_explore = np.zeros(K*len(sess_explore))
 sample_weight_exp = []  # re-weight explored items.
-# use empirical average ctr as beta prior param a, b
-suc_times = sum(y_train)
-fail_times = len(y_train) - suc_times
+
+suc_times = sum(y_train)               # use empirical average ctr as beta prior param a
+fail_times = len(y_train) - suc_times  # use empirical average ctr as beta prior param b
 print("\nsetting beta prior beta(a=%f, b=%f)\n" % (suc_times, fail_times))
 if TS_POLICY == 'score':
     ts = TSOverScore(a=suc_times, b=fail_times)  # initialize thompson sampling with prior beta(a,b), TSOverScore(a=1, b=1)
@@ -210,8 +209,13 @@ elif TS_POLICY == 'position':
     ts = TSOverPosition(k=K, max_pos=MAX_POS, a=suc_times, b=fail_times)
 elif TS_POLICY == 'pos_score':
     ts = TSOverPosScore(k=K, max_pos=MAX_POS, a=suc_times, b=fail_times)
-elif TS_POLICY == 'mae':
-    ts = TSOverMae()
+elif TS_POLICY == 'abs_err':
+    clf_2 = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=3, loss='ls', verbose=1)  # default setting
+    y_pred_clf1 = clf_1.predict_proba(X_train)
+    y_pred_clf1 = [item[1] for item in y_pred_clf1]
+    abs_err = np.abs(y_train - y_pred_clf1)
+    clf_2.fit(X_train, abs_err)
+    ts = TSOverAbsErr()
 else:
     raise ValueError('cannot resolve TS_POLICY')
 
@@ -223,8 +227,11 @@ for s_exp in sess_explore:
     x_exp = x_exp.toarray()
     y_pred_exp = clf_1.predict_proba(x_exp)
     y_pred_exp = [item[1] for item in y_pred_exp]
-
-    exp_idx, bucket_idx, weight = ts.thompson_sample(y_pred_exp, k=K, max_pos=MAX_POS, weight_type=WEIGHT_SCHEME)
+    if TS_POLICY == 'abs_err':
+        abs_err_exp = clf_2.predict(x_exp)
+        exp_idx, bucket_idx, weight = ts.thompson_sample(y_pred_exp, abs_err_exp, k=K, max_pos=MAX_POS, weight_type=WEIGHT_SCHEME)
+    else:
+        exp_idx, bucket_idx, weight = ts.thompson_sample(y_pred_exp, k=K, max_pos=MAX_POS, weight_type=WEIGHT_SCHEME)
 
     x_exp, y_exp = log_k_items(x_exp, y_exp, exp_idx, k=K)
 

@@ -2,5 +2,6 @@ yandex_ranking/input/
 yandex_ranking/test_client.py
 *.pyc
 .idea/
-
+yandex_ranking/exp.log
+yandex_ranking/exp.py
 
