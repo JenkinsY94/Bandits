@@ -10,8 +10,6 @@
  Q:
  1. M1 (LR) is not incrementally updated during exploration; only TS's param get updated in real time.
  TODO:
- 5. train GBDT in held out set (explore?), not training set.
- 6. compare gbdt to baseline that always predicts average absolute error. check the improvement.
  7. Incorporate uncertainty score from Model 2 with TS；set prior of beta(a,b) using 1st stage's ctr.
  8. use FTRL (tensorflow) as Model 1.
  -----------------------------------------------------------------------------
@@ -34,7 +32,7 @@ from offline_emulate import check_sess_click, log_k_items
 
 print(__doc__)
 
-NUM_LINES = int(5 * 1e+3)          # maximum number of session to read (about 1e+8 lines in train file in total)
+NUM_LINES = int(1 * 1e+4)          # maximum number of session to read (about 1e+8 lines in train file in total)
 NUM_SESS = int(1e+5)               # maximum number of session to use
 TRAIN_DIR = 'input/train.gz'
 RAN_SEED = 12345
@@ -171,23 +169,23 @@ def evaluate_algo(clf, test_sess, plot=False, model_name=''):
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # STEP 2: construct features(no-explore) for baseline model LR. train and evaluate.
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-print("="*10 + " baseline model LR " + "="*10)
-X_train, y_train = construct_feature(sess_train_1+sess_train_2+sess_explore, k=K)
-print("Shape of X_train: %s, shape of y_train: %s" % (X_train.shape, y_train.shape))
-
-clf_base = LogisticRegression(penalty='l1', solver='liblinear', C=1.0, class_weight='balanced', verbose=0)
-clf_base.fit(X_train, y_train)
-
-y_pred_tr = clf_base.predict(X_train)  # predict class label
-acc = np.mean(y_train == y_pred_tr)
-precision = precision_score(y_train, y_pred_tr, labels=[0, 1])
-y_pred_proba_tr = clf_base.predict_proba(X_train.toarray())
-loss = log_loss(y_train, y_pred_proba_tr, labels=[0, 1])
-print("BASELINE(LR) in train-set:\n accuracy: %f, precision: %f, log_loss: %f" % (acc, precision, loss))
-
-evaluate_algo(clf_base, sess_test, plot=False, model_name='BASELINE LR')
-
-del clf_base, X_train, y_train
+# print("="*10 + " baseline model LR " + "="*10)
+# X_train, y_train = construct_feature(sess_train_1+sess_train_2+sess_explore, k=K)
+# print("Shape of X_train: %s, shape of y_train: %s" % (X_train.shape, y_train.shape))
+#
+# clf_base = LogisticRegression(penalty='l1', solver='liblinear', C=1.0, class_weight='balanced', verbose=0)
+# clf_base.fit(X_train, y_train)
+#
+# y_pred_tr = clf_base.predict(X_train)  # predict class label
+# acc = np.mean(y_train == y_pred_tr)
+# precision = precision_score(y_train, y_pred_tr, labels=[0, 1])
+# y_pred_proba_tr = clf_base.predict_proba(X_train.toarray())
+# loss = log_loss(y_train, y_pred_proba_tr, labels=[0, 1])
+# print("BASELINE(LR) in train-set:\n accuracy: %f, precision: %f, log_loss: %f" % (acc, precision, loss))
+#
+# evaluate_algo(clf_base, sess_test, plot=False, model_name='BASELINE LR')
+#
+# del clf_base, X_train, y_train
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # STEP 3: train LR, GBDT; TS explore; evaluate.
@@ -208,7 +206,8 @@ clf_2 = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth
 y_pred_clf1 = clf_1.predict_proba(X_train_2)
 y_pred_clf1 = [item[1] for item in y_pred_clf1]
 abs_err = np.abs(y_train_2 - y_pred_clf1)
-clf_2.fit(X_train_2, abs_err)
+new_X_train_2 = hstack((X_train_2, np.array(y_pred_clf1)[:, None]))  # add new feature
+clf_2.fit(new_X_train_2, abs_err)
 
 # explore and retrain LR
 X_explore = np.zeros((K*len(sess_explore), N_FEATURES))
@@ -222,14 +221,15 @@ for s_exp in sess_explore:
     x_exp, y_exp = construct_feature([s_exp], k=10)
     if x_exp is None:
         continue
-    x_exp = x_exp.toarray()
-    y_pred_exp = clf_1.predict_proba(x_exp)
+
+    y_pred_exp = clf_1.predict_proba(x_exp.toarray())
     y_pred_exp = [item[1] for item in y_pred_exp]
 
-    abs_err_exp = clf_2.predict(x_exp)
+    x_exp_2 = hstack((x_exp, np.array(y_pred_exp)[:, None]))
+    abs_err_exp = clf_2.predict(x_exp_2.toarray())
     exp_idx, bucket_idx, weight = ts.thompson_sample(y_pred_exp, abs_err_exp, k=K, max_pos=MAX_POS, weight_type=WEIGHT_SCHEME)
 
-    x_exp, y_exp = log_k_items(x_exp, y_exp, exp_idx, k=K)
+    x_exp, y_exp = log_k_items(x_exp.toarray(), y_exp, exp_idx, k=K)
 
     X_explore[valid_exp_sample:valid_exp_sample+K] = x_exp
     y_explore[valid_exp_sample:valid_exp_sample+K] = y_exp
@@ -245,9 +245,6 @@ del X_explore
 y_explore = y_explore[:valid_exp_sample]
 
 # ts.show_explore_times()
-# ts.show_distribution(bucket_idx=[15, 16, 17])
-# ts.show_distribution(bucket_idx=[20, 25, 30])
-# ts.show_distribution(bucket_idx=[50, 70, 90])
 
 # retrain with new data collected from explore.
 new_X = vstack([X_train_1, X_train_2, X_explore_ss])
